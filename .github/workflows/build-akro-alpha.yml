@@ -1,6 +1,5 @@
 # ═══════════════════════════════════════════════════════════════
 #  AKRO Alpha – GitHub Actions Build Workflow
-#  بناء تطبيق AKRO Alpha تلقائياً على GitHub
 # ═══════════════════════════════════════════════════════════════
 name: Build AKRO Alpha
 
@@ -25,6 +24,13 @@ jobs:
     name: 🔨 Build AKRO Alpha APK
     runs-on: ubuntu-latest
 
+    # ── Expose secrets as env so they can be checked in steps ──
+    env:
+      KEYSTORE_FILE:     ${{ secrets.KEYSTORE_FILE }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
+
     steps:
       # ── 1. Checkout ─────────────────────────────────────────
       - name: Checkout repository
@@ -41,10 +47,11 @@ jobs:
           java-version: '21'
           cache: 'gradle'
 
-      # ── 3. Android SDK & NDK ────────────────────────────────
+      # ── 3. Android SDK ──────────────────────────────────────
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # ── 4. Android NDK ──────────────────────────────────────
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -52,13 +59,13 @@ jobs:
           ndk-version: r27c
           add-to-path: true
 
-      # ── 4. Rust (for ksud) ──────────────────────────────────
+      # ── 5. Rust ─────────────────────────────────────────────
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
 
-      # ── 5. Gradle Cache ─────────────────────────────────────
+      # ── 6. Gradle Cache ─────────────────────────────────────
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -68,43 +75,43 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-
 
-      # ── 6. Get version info ─────────────────────────────────
+      # ── 7. Get version info ─────────────────────────────────
       - name: Get version
         id: version
         run: |
-          VERSION_NAME=$(grep -oP '(?<=managerVersionName = ")[^"]+' manager/build.gradle.kts || echo "dev")
-          VERSION_CODE=$(grep -oP '(?<=managerVersionCode = )\d+' manager/build.gradle.kts || echo "1")
+          VERSION_NAME=$(grep -oP '(?<=managerVersionName = ")[^"]+' manager/build.gradle.kts 2>/dev/null || echo "dev")
+          VERSION_CODE=$(grep -oP '(?<=managerVersionCode = )\d+' manager/build.gradle.kts 2>/dev/null || echo "1")
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "name=${VERSION_NAME}" >> $GITHUB_OUTPUT
           echo "code=${VERSION_CODE}" >> $GITHUB_OUTPUT
           echo "sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "📦 AKRO Alpha v${VERSION_NAME} (${VERSION_CODE}) @ ${SHORT_SHA}"
 
-      # ── 7. Build Debug APK ──────────────────────────────────
+      # ── 8. Build Debug APK ──────────────────────────────────
       - name: Build Debug APK
         working-directory: manager
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            -Pkeystore.file="" \
-            2>&1 | tail -80
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-      # ── 8. Build Release APK (if secrets available) ─────────
+      # ── 9. Check if keystore secret exists ──────────────────
+      - name: Check keystore availability
+        id: keystore_check
+        run: |
+          if [ -n "$KEYSTORE_FILE" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ── 10. Build Release APK ───────────────────────────────
       - name: Build Release APK
-        if: |
-          github.event_name != 'pull_request' &&
-          secrets.KEYSTORE_FILE != ''
+        if: steps.keystore_check.outputs.available == 'true'
         working-directory: manager
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-          KEYSTORE_FILE:     ${{ secrets.KEYSTORE_FILE }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
         run: |
           echo "$KEYSTORE_FILE" | base64 -d > /tmp/release.jks
           ./gradlew :app:assembleRelease \
@@ -115,8 +122,8 @@ jobs:
             -Pkey.password="$KEY_PASSWORD"
           rm -f /tmp/release.jks
 
-      # ── 9. Rename outputs ────────────────────────────────────
-      - name: Rename APK files
+      # ── 11. Collect & rename outputs ────────────────────────
+      - name: Collect APK files
         run: |
           mkdir -p artifacts
           find manager/app/build/outputs/apk -name "*.apk" | while read f; do
@@ -125,7 +132,7 @@ jobs:
           done
           ls -lh artifacts/
 
-      # ── 10. Upload Artifact ──────────────────────────────────
+      # ── 12. Upload artifacts ─────────────────────────────────
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -133,7 +140,7 @@ jobs:
           path: artifacts/*.apk
           retention-days: 30
 
-      # ── 11. GitHub Release (manual trigger) ─────────────────
+      # ── 13. GitHub Release (manual trigger only) ─────────────
       - name: Create GitHub Release
         if: github.event.inputs.release == 'true'
         uses: softprops/action-gh-release@v2
