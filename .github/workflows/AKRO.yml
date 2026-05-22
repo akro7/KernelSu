@@ -1,0 +1,56 @@
+name: فحص كل مستودعات يوزر
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'اسم المستخدم على GitHub'
+        required: true
+        default: 'Gabriel2392'
+
+jobs:
+  scan-all-repos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: جلب وفحص كل المستودعات العامة
+        run: |
+          USERNAME="${{ github.event.inputs.username }}"
+          echo "🔍 جاري فحص كل مستودعات: $USERNAME"
+          echo "================================================"
+          
+          PAGE=1
+          TOTAL=0
+          
+          while true; do
+            # جلب الريبوز صفحة صفحة (100 في كل مرة)
+            REPOS=$(curl -s "https://api.github.com/users/$USERNAME/repos?per_page=100&page=$PAGE&type=public")
+            
+            # التحقق من وجود نتائج
+            COUNT=$(echo "$REPOS" | jq '. | length')
+            
+            if [ "$COUNT" -eq 0 ]; then
+              break
+            fi
+            
+            echo "📄 الصفحة $PAGE - عدد الريبوز: $COUNT"
+            echo "------------------------------------------------"
+            
+            # طباعة تفاصيل كل ريبو
+            echo "$REPOS" | jq -r '.[] | 
+              "📦 الاسم: \(.name)\n" +
+              "⭐ النجوم: \(.stargazers_count)\n" +
+              "🍴 الفورك: \(.forks_count)\n" +
+              "🔤 اللغة: \(.language // "غير محدد")\n" +
+              "📅 آخر تحديث: \(.updated_at)\n" +
+              "🔗 الرابط: \(.html_url)\n" +
+              "📝 الوصف: \(.description // "لا يوجد وصف")\n" +
+              "------------------------------------------------"'
+            
+            TOTAL=$((TOTAL + COUNT))
+            PAGE=$((PAGE + 1))
+          done
+          
+          echo "================================================"
+          echo "✅ انتهى الفحص"
+          echo "📊 إجمالي المستودعات العامة: $TOTAL"
+          echo "👤 الرابط: https://github.com/$USERNAME"
